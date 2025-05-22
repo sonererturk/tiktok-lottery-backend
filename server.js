@@ -1,3 +1,4 @@
+
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
@@ -30,15 +31,20 @@ io.on('connection', (socket) => {
 
       connection.connect().then(() => {
         console.log('📡 TikTok yayınına bağlandı');
+        socket.emit('connection-success');
       }).catch((err) => {
         console.error('❌ Bağlantı hatası:', err.message);
-        socket.emit('error', 'Yayına bağlanılamadı.');
+        socket.emit('connection-error', 'Kullanıcı canlı yayında değil veya bağlanılamadı.');
       });
 
       connection.on('chat', (data) => {
         const msg = data.comment;
         if (msg.toLowerCase().includes(keyword)) {
-          const commentData = { uniqueId: data.uniqueId, comment: msg };
+          const commentData = {
+            uniqueId: data.uniqueId,
+            comment: data.comment,
+            profilePictureUrl: data.profilePictureUrl
+          };
           filteredComments.push(commentData);
           socket.emit('filtered-comment', commentData);
         }
