@@ -5,7 +5,9 @@ const io = require('socket.io')(server);
 const { WebcastPushConnection } = require('tiktok-live-connector');
 const cors = require('cors');
 
-app.use(cors());
+app.use(cors({
+  origin: 'https://cekilisyap.odu.icu'
+}));
 app.use(express.static('public'));
 
 // Hata mesajları sözlüğü
