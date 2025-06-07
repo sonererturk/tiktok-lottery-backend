@@ -140,6 +140,6 @@ io.on('connection', (socket) => {
     });
 });
 
-server.listen(8091, () => {
-    console.log('Sunucu çalışıyor: http://localhost:8091');
+server.listen(3000, () => {
+    console.log('Sunucu çalışıyor.');
 }); 
