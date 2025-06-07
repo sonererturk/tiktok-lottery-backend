@@ -1,7 +1,12 @@
 const express = require('express');
 const app = express();
 const server = require('http').createServer(app);
-const io = require('socket.io')(server);
+const io = require('socket.io')(server, {
+  cors: {
+    origin: "https://cekilisyap.odu.icu",
+    methods: ["GET", "POST"]
+  }
+});
 const { WebcastPushConnection } = require('tiktok-live-connector');
 const cors = require('cors');
 
