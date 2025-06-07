@@ -63,29 +63,35 @@ io.on('connection', (socket) => {
             
             try {
                 await tiktokConnection.connect();
+                console.log(`TikTok bağlantısı başarıyla kuruldu: ${username}`);
                 socket.emit('connection-success', {
                     message: `${username} odasına başarıyla bağlanıldı!`
                 });
             } catch (connectError) {
+                console.error('TikTok bağlantı hatası:', connectError.message || connectError);
                 socket.emit('error', getLocalizedError(connectError.message || connectError));
                 return;
             }
 
             // Bağlantı hata olaylarını dinle
             tiktokConnection.on('error', (err) => {
+                console.error('TikTok bağlantı hatası (olay):', err.message || err);
                 socket.emit('error', getLocalizedError(err.message || err));
             });
 
             tiktokConnection.on('disconnect', () => {
+                console.log('TikTok canlı yayın bağlantısı kesildi.');
                 socket.emit('error', 'Canlı yayın bağlantısı kesildi');
             });
 
             // Chat mesajlarını dinle
             tiktokConnection.on('chat', (data) => {
+                console.log(`Gelen yorum (${data.nickname}): ${data.comment}`);
                 const message = data.comment.toLowerCase();
                 
                 // Hedef kelimeyi içeren mesajları kontrol et
                 if (message.includes(targetKeyword)) {
+                    console.log(`Hedef kelime bulundu: '${targetKeyword}' yorumda: '${data.comment}'`);
                     const participant = {
                         username: data.nickname,
                         message: data.comment,
