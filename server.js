@@ -1,78 +1,145 @@
-
 const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const { TikTokLiveConnection } = require('tiktok-live-connector');
-
 const app = express();
-const server = http.createServer(app);
-const io = new Server(server, {
-  cors: { origin: '*' }
-});
+const server = require('http').createServer(app);
+const io = require('socket.io')(server);
+const { WebcastPushConnection } = require('tiktok-live-connector');
 
-let connection = null;
-let keyword = '';
-let filteredComments = [];
+app.use(express.static('public'));
+
+// Hata mesajları sözlüğü
+const errorMessages = {
+    'LIVE has ended': 'Canlı yayın bulunamadı',
+    'LIVE_HAS_ENDED': 'Canlı yayın bulunamadı',
+    'Failed to retrieve room_id': 'Böyle bir kullanıcı bulunamadı',
+    '19881007': 'Böyle bir kullanıcı bulunamadı',
+    'user_not_found': 'Böyle bir kullanıcı bulunamadı',
+    'API Error': 'Böyle bir kullanıcı bulunamadı',
+    'Room not found': 'Canlı yayın bulunamadı',
+    'Connection closed': 'Bağlantı kesildi',
+    'Network error': 'İnternet bağlantınızı kontrol edin'
+};
+
+// Hata mesajını Türkçeleştiren fonksiyon
+function getLocalizedError(error) {
+    if (typeof error === 'string') {
+        for (const [key, value] of Object.entries(errorMessages)) {
+            if (error.includes(key)) {
+                return value;
+            }
+        }
+    }
+    return 'Bilinmeyen bir hata oluştu';
+}
+
+// Çekiliş katılımcılarını tutacak set
+let participants = new Map(); // userId -> participant object
+let targetKeyword = '';
+let allowDuplicateUsers = false;
 
 io.on('connection', (socket) => {
-  console.log('✅ Yeni kullanıcı bağlı');
+    let tiktokConnection;
 
-  socket.on('start-connection', ({ username, keyword: userKeyword }) => {
-    try {
-      if (!username || !userKeyword) return;
-      keyword = userKeyword.toLowerCase();
-      filteredComments = [];
+    // TikTok odasına bağlanma
+    socket.on('connect-to-room', async ({ username, keyword, allowDuplicates }) => {
+        try {
+            // Önceki bağlantıyı temizle
+            if (tiktokConnection) {
+                tiktokConnection.disconnect();
+                participants.clear();
+            }
 
-      if (connection) {
-        connection.disconnect();
-      }
+            targetKeyword = keyword.toLowerCase();
+            allowDuplicateUsers = allowDuplicates;
+            tiktokConnection = new WebcastPushConnection(username);
+            
+            try {
+                await tiktokConnection.connect();
+                socket.emit('connection-success', {
+                    message: `${username} odasına başarıyla bağlanıldı!`
+                });
+            } catch (connectError) {
+                socket.emit('error', getLocalizedError(connectError.message || connectError));
+                return;
+            }
 
-      connection = new TikTokLiveConnection(username);
+            // Bağlantı hata olaylarını dinle
+            tiktokConnection.on('error', (err) => {
+                socket.emit('error', getLocalizedError(err.message || err));
+            });
 
-      connection.connect().then(() => {
-        console.log('📡 TikTok yayınına bağlandı');
-        socket.emit('connection-success');
-      }).catch((err) => {
-        console.error('❌ Bağlantı hatası:', err.message);
-        socket.emit('connection-error', 'Kullanıcı canlı yayında değil veya bağlanılamadı.');
-      });
+            tiktokConnection.on('disconnect', () => {
+                socket.emit('error', 'Canlı yayın bağlantısı kesildi');
+            });
 
-      connection.on('chat', (data) => {
-        const msg = data.comment;
-        if (msg.toLowerCase().includes(keyword)) {
-          const commentData = {
-            uniqueId: data.uniqueId,
-            comment: data.comment,
-            profilePictureUrl: data.profilePictureUrl
-          };
-          filteredComments.push(commentData);
-          socket.emit('filtered-comment', commentData);
+            // Chat mesajlarını dinle
+            tiktokConnection.on('chat', (data) => {
+                const message = data.comment.toLowerCase();
+                
+                // Hedef kelimeyi içeren mesajları kontrol et
+                if (message.includes(targetKeyword)) {
+                    const participant = {
+                        username: data.nickname,
+                        message: data.comment,
+                        profilePicture: data.profilePictureUrl,
+                        userId: data.userId
+                    };
+
+                    // Eğer aynı kullanıcı daha önce katıldıysa ve tekrar katılım kapalıysa
+                    if (!allowDuplicateUsers && participants.has(data.userId)) {
+                        socket.emit('duplicate-entry', {
+                            username: data.nickname,
+                            message: 'Bu kullanıcı zaten katılmış!',
+                            profilePicture: data.profilePictureUrl
+                        });
+                        return;
+                    }
+
+                    // Kullanıcıyı katılımcılara ekle
+                    if (allowDuplicateUsers) {
+                        const uniqueId = `${data.userId}_${Date.now()}`;
+                        participants.set(uniqueId, participant);
+                    } else {
+                        participants.set(data.userId, participant);
+                    }
+
+                    socket.emit('valid-message', participant);
+                    socket.emit('participant-count', participants.size);
+                }
+            });
+
+        } catch (err) {
+            socket.emit('error', getLocalizedError(err.message || err));
         }
-      });
-    } catch (e) {
-      console.error('🔥 start-connection hatası:', e.message);
-    }
-  });
+    });
 
-  socket.on('draw-winner', () => {
-    try {
-      if (filteredComments.length === 0) {
-        socket.emit('winner', null);
-      } else {
-        const winner = filteredComments[Math.floor(Math.random() * filteredComments.length)];
+    // Çekiliş yapma
+    socket.on('draw-winner', () => {
+        if (participants.size === 0) {
+            socket.emit('error', 'Henüz katılımcı yok!');
+            return;
+        }
+
+        const participantsArray = Array.from(participants.values());
+        const randomIndex = Math.floor(Math.random() * participantsArray.length);
+        const winner = participantsArray[randomIndex];
+
         socket.emit('winner', winner);
-      }
-    } catch (e) {
-      console.error('🔥 draw-winner hatası:', e.message);
-    }
-  });
+    });
 
-  socket.on('disconnect', () => {
-    console.log("🔌 Socket bağlantısı kapandı");
-    if (connection) connection.disconnect();
-  });
+    // Çekilişi sıfırlama
+    socket.on('reset-raffle', () => {
+        participants.clear();
+        socket.emit('participant-count', 0);
+        socket.emit('raffle-reset');
+    });
+
+    socket.on('disconnect', () => {
+        if (tiktokConnection) {
+            tiktokConnection.disconnect();
+        }
+    });
 });
 
-server.listen(3000, () => {
-  console.log('🚀 Sunucu 3000 portunda çalışıyor');
-});
+server.listen(8091, () => {
+    console.log('Sunucu çalışıyor: http://localhost:8091');
+}); 
